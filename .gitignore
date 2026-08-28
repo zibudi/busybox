@@ -65,3 +65,6 @@ TAGS
 # zig
 /zig-out/
 /.zig-cache/
+
+# generated/ is carried on purpose: it is what upstream's own scripts write.
+!generated/**
