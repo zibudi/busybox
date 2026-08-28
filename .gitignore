@@ -61,3 +61,7 @@ TAGS
 # user-supplied scripts
 #
 /embed
+
+# zig
+/zig-out/
+/.zig-cache/
