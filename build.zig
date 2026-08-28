@@ -62,9 +62,15 @@ pub fn build(b: *std.Build) void {
         .flags = &.{"--include=autoconf.h"},
     });
 
-    const pack = b.addRunArtifact(helper(b, "usage"));
-    pack.addFileArg(b.addRunArtifact(messages).captureStdOut(.{}));
-    _ = tables_dir.addCopyFile(pack.addOutputFileArg("usage_compressed.h"), "usage_compressed.h");
+    // usage_compressed wants the program in a directory it can name.
+    const usage_dir = b.addWriteFiles();
+    _ = usage_dir.addCopyFile(messages.getEmittedBin(), "usage");
+
+    const pack = b.addSystemCommand(&.{"sh"});
+    pack.addFileArg(b.path("applets/usage_compressed"));
+    const usage_h = pack.addOutputFileArg("usage_compressed.h");
+    pack.addDirectoryArg(usage_dir.getDirectory());
+    _ = tables_dir.addCopyFile(usage_h, "usage_compressed.h");
 
     const busybox = b.addExecutable(.{
         .name = "busybox",
