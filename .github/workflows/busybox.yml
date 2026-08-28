@@ -20,32 +20,30 @@ jobs:
 
       - run: zig build -Doptimize=ReleaseSmall
 
-      - name: generated/ is what our own scripts write
+      - name: our own shell writes what the host's shell wrote
         run: |
           bb=$PWD/zig-out/bin/busybox
           echo "busybox provides $("$bb" --list | wc -l) applets"
 
-          # The scripts call sed, cat, cmp, find, od and dd by name, and busybox
-          # dispatches on argv[0], so it needs a directory of the names it answers to.
+          # busybox dispatches on argv[0], so the scripts need a directory of the
+          # names they call: the shell, and the sed, cat, cmp, find, od and dd.
           tools=$(mktemp -d)
           cp "$bb" "$tools/busybox"
           for applet in $("$bb" --list); do ln -sf busybox "$tools/$applet"; done
 
-          out=$(mktemp -d)
-          mkdir -p "$out/include"
-          cp config/zibudi.config "$out/.config"
+          generate() {
+            mkdir -p "$1/include"
+            cp config/zibudi.config "$1/.config"
+            cd "$1"
+            sh "$GITHUB_WORKSPACE/scripts/gen_build_files.sh" "$GITHUB_WORKSPACE" .
+            sh "$GITHUB_WORKSPACE/scripts/embedded_scripts" include/embedded_scripts.h
+            sh "$GITHUB_WORKSPACE/scripts/generate_BUFSIZ.sh" include/common_bufsiz.h
+          }
 
-          # Nothing of the distribution's is on this path.
-          cd "$out"
-          export PATH="$tools"
-          sh "$GITHUB_WORKSPACE/scripts/gen_build_files.sh" "$GITHUB_WORKSPACE" .
-          sh "$GITHUB_WORKSPACE/scripts/embedded_scripts" include/embedded_scripts.h
-          sh "$GITHUB_WORKSPACE/scripts/generate_BUFSIZ.sh" include/common_bufsiz.h
+          host=$(mktemp -d)
+          mine=$(mktemp -d)
+          ( generate "$host" )
+          ( export PATH="$tools"; generate "$mine" )
 
-          n=0
-          for f in include/applets.h include/usage.h include/common_bufsiz.h \
-                   include/embedded_scripts.h $(find . -name Config.in | sed 's|^\./||'); do
-            diff "$GITHUB_WORKSPACE/generated/$f" "$f"
-            n=$((n + 1))
-          done
-          echo "$n files, every one identical to what the scripts wrote"
+          diff -r "$host" "$mine"
+          echo "$(find "$mine" -type f | wc -l) files, and which shell wrote them made no difference"

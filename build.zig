@@ -6,16 +6,45 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // upstream's own scripts, run the way upstream runs them: gen_build_files.sh
+    // lifts applets.h and usage.h out of the //applet: and //usage: comments and
+    // splices a Config.in together for every directory.
+    const gen = b.addSystemCommand(&.{"sh"});
+    gen.addFileArg(b.path("scripts/gen_build_files.sh"));
+    gen.addDirectoryArg(b.path("."));
+    const kconfig_tree = gen.addOutputDirectoryArg("generated");
+
+    const include = b.addWriteFiles();
+    for ([_][]const u8{ "applets.h", "usage.h" }) |name| {
+        _ = include.addCopyFile(kconfig_tree.path(b, b.fmt("include/{s}", .{name})), b.fmt("include/{s}", .{name}));
+    }
+
+    // These two read ./.config and write the one header they are handed.
+    const dot_config = b.addWriteFiles();
+    _ = dot_config.addCopyFile(b.path("config/zibudi.config"), ".config");
+    for ([_][2][]const u8{
+        .{ "scripts/embedded_scripts", "embedded_scripts.h" },
+        .{ "scripts/generate_BUFSIZ.sh", "common_bufsiz.h" },
+    }) |script| {
+        const run = b.addSystemCommand(&.{"sh"});
+        run.addFileArg(b.path(script[0]));
+        const header = run.addOutputFileArg(script[1]);
+        run.setCwd(dot_config.getDirectory());
+        _ = include.addCopyFile(header, b.fmt("include/{s}", .{script[1]}));
+    }
+
     const autoconf = b.addRunArtifact(helper(b, "kconfig"));
     autoconf.addArtifactArg(kconfig(b));
-    autoconf.addDirectoryArg(b.path("generated"));
+    autoconf.addDirectoryArg(kconfig_tree);
     autoconf.addFileArg(b.path("Config.in"));
     autoconf.addFileArg(b.path("config/zibudi.config"));
     autoconf.addArg(version);
     const config = autoconf.addOutputDirectoryArg("kconfig").path(b, "include");
 
+    const includes = include.getDirectory().path(b, "include");
+
     const tables = host(b, "applet_tables");
-    addHeaders(b, tables, config);
+    addHeaders(b, tables, config, includes);
     tables.root_module.addCSourceFile(.{
         .file = b.path("applets/applet_tables.c"),
         .flags = &.{"--include=autoconf.h"},
@@ -27,7 +56,7 @@ pub fn build(b: *std.Build) void {
     _ = tables_dir.addCopyFile(run_tables.addOutputFileArg("NUM_APPLETS.h"), "NUM_APPLETS.h");
 
     const messages = host(b, "usage");
-    addHeaders(b, messages, config);
+    addHeaders(b, messages, config, includes);
     messages.root_module.addCSourceFile(.{
         .file = b.path("applets/usage.c"),
         .flags = &.{"--include=autoconf.h"},
@@ -47,7 +76,7 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(busybox);
 
-    addHeaders(b, busybox, config);
+    addHeaders(b, busybox, config, includes);
     busybox.root_module.addIncludePath(tables_dir.getDirectory());
     busybox.root_module.addIncludePath(b.path("libbb"));
     busybox.root_module.addCSourceFiles(.{
@@ -71,14 +100,9 @@ pub fn build(b: *std.Build) void {
     });
 }
 
-// generated/ is the object tree upstream's own scripts write: gen_build_files.sh
-// puts applets.h and usage.h in include/ and a Config.in in each directory,
-// generate_BUFSIZ.sh and embedded_scripts write the other two headers. It is
-// carried because running those scripts needs a shell, and the shell is what
-// this builds.
-fn addHeaders(b: *std.Build, compile: *std.Build.Step.Compile, config: std.Build.LazyPath) void {
+fn addHeaders(b: *std.Build, compile: *std.Build.Step.Compile, config: std.Build.LazyPath, include: std.Build.LazyPath) void {
     compile.root_module.addIncludePath(config);
-    compile.root_module.addIncludePath(b.path("generated/include"));
+    compile.root_module.addIncludePath(include);
     compile.root_module.addIncludePath(b.path("include"));
 }
 

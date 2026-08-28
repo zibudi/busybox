@@ -9,7 +9,6 @@
         "build.zig.zon",
         "config",
         "tools",
-        "generated",
         "Config.in",
         "scripts/kconfig",
         "scripts/gen_build_files.sh",
