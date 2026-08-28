@@ -68,3 +68,6 @@ TAGS
 
 # generated/ is carried on purpose: it is what upstream's own scripts write.
 !generated/**
+
+# .* above would otherwise swallow the workflow.
+!.github

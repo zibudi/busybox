@@ -1,0 +1,51 @@
+name: busybox
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29
+        with:
+          version: 0.16.0
+
+      - run: zig build
+
+      - name: generated/ is what our own scripts write
+        run: |
+          bb=$PWD/zig-out/bin/busybox
+          echo "busybox provides $("$bb" --list | wc -l) applets"
+
+          # The scripts call sed, cat, cmp, find, od and dd by name, and busybox
+          # dispatches on argv[0], so it needs a directory of the names it answers to.
+          tools=$(mktemp -d)
+          cp "$bb" "$tools/busybox"
+          for applet in $("$bb" --list); do ln -sf busybox "$tools/$applet"; done
+
+          out=$(mktemp -d)
+          mkdir -p "$out/include"
+          cp config/zibudi.config "$out/.config"
+
+          # Nothing of the distribution's is on this path.
+          cd "$out"
+          export PATH="$tools"
+          sh "$GITHUB_WORKSPACE/scripts/gen_build_files.sh" "$GITHUB_WORKSPACE" .
+          sh "$GITHUB_WORKSPACE/scripts/embedded_scripts" include/embedded_scripts.h
+          sh "$GITHUB_WORKSPACE/scripts/generate_BUFSIZ.sh" include/common_bufsiz.h
+
+          n=0
+          for f in include/applets.h include/usage.h include/common_bufsiz.h \
+                   include/embedded_scripts.h $(find . -name Config.in | sed 's|^\./||'); do
+            diff "$GITHUB_WORKSPACE/generated/$f" "$f"
+            n=$((n + 1))
+          done
+          echo "$n files, every one identical to what the scripts wrote"
