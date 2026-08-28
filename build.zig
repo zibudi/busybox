@@ -6,50 +6,28 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const autoconf = b.addRunArtifact(helper(b, "autoconf"));
+    const autoconf = b.addRunArtifact(helper(b, "kconfig"));
+    autoconf.addArtifactArg(kconfig(b));
+    autoconf.addDirectoryArg(b.path("generated"));
+    autoconf.addFileArg(b.path("Config.in"));
     autoconf.addFileArg(b.path("config/zibudi.config"));
     autoconf.addArg(version);
-    const generated = autoconf.addOutputDirectoryArg("include");
+    const config = autoconf.addOutputDirectoryArg("kconfig").path(b, "include");
 
-    const applets = b.addRunArtifact(helper(b, "applets"));
-    applets.addDirectoryArg(b.path("."));
-    const headers = applets.addOutputDirectoryArg("include");
-
-    const tables = b.addExecutable(.{
-        .name = "applet_tables",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .ReleaseFast,
-            .link_libc = true,
-        }),
-    });
-    tables.root_module.addIncludePath(generated);
-    tables.root_module.addIncludePath(headers);
-    tables.root_module.addIncludePath(b.path("include"));
+    const tables = host(b, "applet_tables");
+    addHeaders(b, tables, config);
     tables.root_module.addCSourceFile(.{
         .file = b.path("applets/applet_tables.c"),
         .flags = &.{"--include=autoconf.h"},
     });
 
     const run_tables = b.addRunArtifact(tables);
-    const applet_tables = run_tables.addOutputFileArg("applet_tables.h");
-    const num_applets = run_tables.addOutputFileArg("NUM_APPLETS.h");
-
     const tables_dir = b.addWriteFiles();
-    _ = tables_dir.addCopyFile(applet_tables, "applet_tables.h");
-    _ = tables_dir.addCopyFile(num_applets, "NUM_APPLETS.h");
+    _ = tables_dir.addCopyFile(run_tables.addOutputFileArg("applet_tables.h"), "applet_tables.h");
+    _ = tables_dir.addCopyFile(run_tables.addOutputFileArg("NUM_APPLETS.h"), "NUM_APPLETS.h");
 
-    const messages = b.addExecutable(.{
-        .name = "usage",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .ReleaseFast,
-            .link_libc = true,
-        }),
-    });
-    messages.root_module.addIncludePath(generated);
-    messages.root_module.addIncludePath(headers);
-    messages.root_module.addIncludePath(b.path("include"));
+    const messages = host(b, "usage");
+    addHeaders(b, messages, config);
     messages.root_module.addCSourceFile(.{
         .file = b.path("applets/usage.c"),
         .flags = &.{"--include=autoconf.h"},
@@ -69,10 +47,8 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(busybox);
 
-    busybox.root_module.addIncludePath(generated);
+    addHeaders(b, busybox, config);
     busybox.root_module.addIncludePath(tables_dir.getDirectory());
-    busybox.root_module.addIncludePath(headers);
-    busybox.root_module.addIncludePath(b.path("include"));
     busybox.root_module.addIncludePath(b.path("libbb"));
     busybox.root_module.addCSourceFiles(.{
         .root = b.path("."),
@@ -92,6 +68,45 @@ pub fn build(b: *std.Build) void {
             "-fno-builtin-printf",
             "-Wno-deprecated-declarations",
         },
+    });
+}
+
+// generated/ is the object tree upstream's own scripts write: gen_build_files.sh
+// puts applets.h and usage.h in include/ and a Config.in in each directory,
+// generate_BUFSIZ.sh and embedded_scripts write the other two headers. It is
+// carried because running those scripts needs a shell, and the shell is what
+// this builds.
+fn addHeaders(b: *std.Build, compile: *std.Build.Step.Compile, config: std.Build.LazyPath) void {
+    compile.root_module.addIncludePath(config);
+    compile.root_module.addIncludePath(b.path("generated/include"));
+    compile.root_module.addIncludePath(b.path("include"));
+}
+
+// zconf.tab.c includes the rest of kconfig, so the three files upstream ships
+// pre-generated have to be reachable under the names it includes them by.
+fn kconfig(b: *std.Build) *std.Build.Step.Compile {
+    const shipped = b.addWriteFiles();
+    const parser = shipped.addCopyFile(b.path("scripts/kconfig/zconf.tab.c_shipped"), "zconf.tab.c");
+    _ = shipped.addCopyFile(b.path("scripts/kconfig/zconf.hash.c_shipped"), "zconf.hash.c");
+    _ = shipped.addCopyFile(b.path("scripts/kconfig/lex.zconf.c_shipped"), "lex.zconf.c");
+
+    const conf = host(b, "conf");
+    conf.root_module.addIncludePath(shipped.getDirectory());
+    conf.root_module.addIncludePath(b.path("scripts/kconfig"));
+    for ([_]std.Build.LazyPath{ b.path("scripts/kconfig/conf.c"), parser }) |file| {
+        conf.root_module.addCSourceFile(.{ .file = file, .flags = &.{"-DKBUILD_NO_NLS"} });
+    }
+    return conf;
+}
+
+fn host(b: *std.Build, name: []const u8) *std.Build.Step.Compile {
+    return b.addExecutable(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+            .link_libc = true,
+        }),
     });
 }
 
